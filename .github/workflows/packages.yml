@@ -1,0 +1,366 @@
+# Keeps the apt, dnf and Alpine repositories on the latest release of marqius-wkhtmltopdf, and
+# proves that each release installs before anyone gets it:
+#
+#   every hour     when marqius.com has a release newer than the repositories serve, its four
+#                  downloads are checked against their published checksums; the six packages are
+#                  built and signed; the repositories are rebuilt with them and every release
+#                  before; README.md's lines, exactly as printed, install them on 13 systems, each
+#                  on x86-64 and on ARM64, and update the release before to them. Only then are the
+#                  release (its packages and SHA256SUMS, signed with the package key and with
+#                  cosign) and the repositories published, and the published repositories are
+#                  tested again with every line of the README, Dockerfile lines included.
+#                  Every package and SHA256SUMS also gets GitHub's build provenance
+#   by hand        Actions > Packages > Run workflow: the same, now
+#   on a change    to main, or in a pull request: the same build and tests with throwaway keys;
+#                  nothing is published
+#
+# Publishing is switched on by the repository variable PUBLISHING=on (Settings > Secrets and
+# variables > Actions > Variables); anything else pauses it, and a run by hand then builds and
+# tests without publishing.
+#
+# The signing keys are secrets of the "packages" environment, which only main can use:
+# PACKAGES_GPG_KEY (OpenPGP, armored) and PACKAGES_APK_KEY (RSA, for Alpine). The site is
+# GitHub Pages, at the address packages.marqius.com (set in Settings > Pages).
+name: Packages
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BASE_URL: https://packages.marqius.com
+
+jobs:
+  follow:
+    runs-on: ubuntu-24.04
+    outputs:
+      new: ${{ steps.follow.outputs.new }}
+      version: ${{ steps.follow.outputs.version }}
+      build: ${{ steps.decide.outputs.build }}
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: follow
+        name: Compare marqius.com's latest release with what the repositories serve
+        if: github.event_name != 'schedule' || vars.PUBLISHING == 'on'
+        env:
+          ALWAYS: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || vars.PUBLISHING != 'on') && '--always' || '' }}
+        run: python3 scripts/follow-release.py --site "$BASE_URL" --out builds $ALWAYS
+      - id: decide
+        name: Build and test, then publish only a new release, only from main, only when switched on
+        env:
+          NEW: ${{ steps.follow.outputs.new }}
+          PUBLISHING: ${{ vars.PUBLISHING }}
+        run: |
+          build=false; publish=false
+          case "$GITHUB_EVENT_NAME" in
+            push|pull_request) build=true ;;
+            schedule) if [ "$NEW" = true ]; then build=true; fi ;;
+            workflow_dispatch) if [ "$NEW" = true ] || [ "$PUBLISHING" != on ]; then build=true; fi ;;
+          esac
+          if [ "$build" = true ] && [ "$NEW" = true ] && [ "$GITHUB_REF" = refs/heads/main ] \
+             && [ "$PUBLISHING" = on ] \
+             && { [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; }; then
+            publish=true
+          fi
+          if [ "$PUBLISHING" != on ]; then echo "publishing is switched off (repository variable PUBLISHING)"; fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "build $build, publish $publish"
+      - if: steps.decide.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: builds
+          path: builds
+          retention-days: 7
+
+  # GitHub pauses the schedule of a public repository after 60 days without activity
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Keep the hourly check running
+        run: |
+          last="$(git log -1 --format=%ct)"
+          if [ $(( $(date +%s) - last )) -gt $(( 50 * 86400 )) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -q --allow-empty -m "Keep the hourly release check running" \
+              -m "GitHub pauses a public repository's scheduled workflows after 60 days without activity."
+            git push -q origin HEAD:main
+          fi
+
+  build:
+    needs: follow
+    if: needs.follow.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      room: ${{ steps.room.outputs.note }}
+    environment: ${{ needs.follow.outputs.publish == 'true' && 'packages' || '' }}
+    env:
+      VERSION: ${{ needs.follow.outputs.version }}
+      PUBLISH: ${{ needs.follow.outputs.publish }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: builds
+          path: builds
+      - name: The signing keys (throwaway ones when nothing is published)
+        env:
+          GPG_KEY: ${{ secrets.PACKAGES_GPG_KEY }}
+          APK_KEY: ${{ secrets.PACKAGES_APK_KEY }}
+        run: |
+          keys="$RUNNER_TEMP/keys"
+          mkdir -p "$keys" && chmod 700 "$keys"
+          if [ "$PUBLISH" = true ]; then
+            if [ -z "$GPG_KEY" ] || [ -z "$APK_KEY" ]; then
+              echo "::error::the packages environment has no signing keys"; exit 1
+            fi
+            printf '%s\n' "$GPG_KEY" > "$keys/gpg.asc"
+            printf '%s\n' "$APK_KEY" > "$keys/apk.rsa"
+            chmod 600 "$keys"/*
+          else
+            scripts/test-keys.sh "$keys"
+          fi
+          echo "MARQIUS_GPG_PRIVATE=$keys/gpg.asc" >> "$GITHUB_ENV"
+          echo "MARQIUS_APK_PRIVATE=$keys/apk.rsa" >> "$GITHUB_ENV"
+          echo "MARQIUS_APK_KEY_NAME=marqius.rsa.pub" >> "$GITHUB_ENV"
+      - name: The release as published, if an earlier run published it but stopped before the site
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p release
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release download "v$VERSION" --dir release
+            (cd release && sha256sum --ignore-missing --quiet -c SHA256SUMS)
+          fi
+      - name: Build and sign the six packages, and the release's SHA256SUMS
+        run: |
+          mkdir -p packages release
+          if [ -s release/SHA256SUMS ]; then
+            cp release/*.deb release/*.rpm release/*.apk packages/
+          else
+            scripts/build-packages.sh "$VERSION" builds packages
+            scripts/make-sums.sh builds packages release
+            cp packages/* release/
+          fi
+      - name: The packages of every release before, kept in the repositories
+        if: env.PUBLISH == 'true'
+        run: scripts/previous-releases.sh "$VERSION" before 900
+      - name: Write and sign the repositories, and their page
+        run: |
+          mkdir -p pool before
+          cp packages/* pool/
+          if ls before/*.deb >/dev/null 2>&1; then cp before/*.deb before/*.rpm before/*.apk pool/; fi
+          scripts/make-repos.sh pool site "$BASE_URL"
+          python3 scripts/make-index.py README.md site ${{ needs.follow.outputs.publish == 'true' && '--strict' || '' }}
+          if ls before/*.deb >/dev/null 2>&1; then
+            scripts/make-repos.sh before site-before "$BASE_URL"
+          fi
+      - id: room
+        name: How much of GitHub Pages' 1 GB the repositories use
+        run: |
+          used="$(du -sm site | cut -f1)"
+          left="$(tr '\n' ' ' < before/LEFT-OUT 2>/dev/null || true)"
+          echo "the repositories use $used MB of GitHub Pages' 1 GB${left:+; left out for room: $left}"
+          if [ "$used" -gt 600 ] || [ -n "${left% }" ]; then
+            echo "note=The package repositories use $used MB of GitHub Pages' 1 GB${left:+, and no longer hold $left}. Move them to Cloudflare R2 before they fill: see MAINTAINING.md, The address. Customers change nothing." >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site
+          path: site
+          retention-days: 7
+      - if: hashFiles('site-before/VERSION') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-before
+          path: site-before
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release
+          retention-days: 7
+
+  test:
+    needs: [follow, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, platform: linux/amd64, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, platform: linux/arm64, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      PLATFORMS: ${{ matrix.platform }}
+      JOBS: "6"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: site
+      - name: README's lines on 13 systems, before anything is published
+        run: RESULTS="$RUNNER_TEMP/install" scripts/test-repos.sh site
+      - id: before
+        if: needs.follow.outputs.publish == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site-before
+          path: site-before
+      - name: README's update line, from the release before to this one
+        if: steps.before.outcome == 'success'
+        run: RESULTS="$RUNNER_TEMP/update" scripts/test-repos.sh --upgrade site-before site
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-logs-${{ matrix.arch }}
+          path: ${{ runner.temp }}/*/*.log
+          retention-days: 14
+
+  publish:
+    needs: [follow, build, test]
+    if: needs.follow.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+      attestations: write
+      issues: write
+    env:
+      VERSION: ${{ needs.follow.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: site
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: Sign SHA256SUMS with cosign (Sigstore records the signature publicly)
+        run: |
+          [ -s release/SHA256SUMS.sigstore.json ] || cosign sign-blob --yes --bundle release/SHA256SUMS.sigstore.json release/SHA256SUMS
+          cosign verify-blob release/SHA256SUMS --bundle release/SHA256SUMS.sigstore.json \
+            --certificate-identity "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/.github/workflows/packages.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Record how each file was made (GitHub's build provenance)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/*.deb
+            release/*.rpm
+            release/*.apk
+            release/SHA256SUMS
+      - name: Publish the release
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # an earlier run published it and stopped before the site: add only what it lacks
+            have="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            for f in release/*; do
+              echo "$have" | grep -qx "${f##*/}" || gh release upload "v$VERSION" "$f" --repo "$GITHUB_REPOSITORY"
+            done
+          else
+            {
+              echo "marqius-wkhtmltopdf $VERSION for apt, dnf and apk. To install or update it, follow the [README](https://github.com/$GITHUB_REPOSITORY#readme)."
+              echo
+              echo "SHA256SUMS lists this release's four downloads on marqius.com and its six packages. It is signed with the package key (SHA256SUMS.asc) and with cosign (SHA256SUMS.sigstore.json), and each package and SHA256SUMS carries GitHub's build provenance; the README shows how to check them."
+              echo
+              echo "Installed and tested before publishing on Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04, Rocky Linux 9 and 10, Red Hat Enterprise Linux 9 (UBI), Fedora, Amazon Linux 2023 and Alpine 3.22, 3.23 and 3.24, on x86-64 and ARM64: [the run]($RUN_URL)."
+            } > "$RUNNER_TEMP/notes.md"
+            gh release create "v$VERSION" release/* --repo "$GITHUB_REPOSITORY" \
+              --title "marqius-wkhtmltopdf $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - name: Tell the owners when GitHub Pages is filling up
+        if: needs.build.outputs.room != ''
+        env:
+          NOTE: ${{ needs.build.outputs.room }}
+        run: |
+          title="The package repositories are filling GitHub Pages"
+          open="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "$VERSION: $NOTE"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$NOTE"
+          fi
+
+  verify:
+    needs: [follow, publish]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, platform: linux/amd64, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, platform: linux/arm64, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      issues: write
+    env:
+      VERSION: ${{ needs.follow.outputs.version }}
+      PLATFORMS: ${{ matrix.platform }}
+      PLATFORM: ${{ matrix.platform }}
+      JOBS: "6"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wait until the published repositories serve it
+        run: scripts/wait-live.sh "$VERSION"
+      - name: README's lines on 13 systems, against the published repositories
+        run: RESULTS="$RUNNER_TEMP/live" scripts/test-repos.sh --live
+      - name: Room for the Dockerfile tests' larger images
+        run: docker system prune -af > /dev/null
+      - name: README's Dockerfile lines
+        run: RESULTS="$RUNNER_TEMP/dockerfiles" scripts/test-dockerfiles.sh
+      - if: matrix.arch == 'amd64'
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: README's lines that check SHA256SUMS
+        if: matrix.arch == 'amd64'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/test-sums.sh
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-logs-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/live/*.log
+            ${{ runner.temp }}/dockerfiles/*/log
+          retention-days: 30
+      - name: Tell the owners
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "marqius-wkhtmltopdf $VERSION is published, but a README line failed on ${{ matrix.arch }}" \
+            --body "The published repositories were tested with README.md's lines after publishing, and one failed: $RUN_URL"

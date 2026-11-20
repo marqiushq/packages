@@ -1,0 +1,9 @@
+# made by the scripts and the workflow, never committed
+/builds/
+/packages/
+/before/
+/pool/
+/release/
+/site/
+/site-before/
+__pycache__/

@@ -1,0 +1,20 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: marqius-wkhtmltopdf
+Upstream-Contact: Simple AI LLC <hello@marqius.com>
+Source: https://marqius.com/wkhtmltopdf/
+
+Files: *
+Copyright: 2026 Simple AI LLC
+License: LicenseRef-marqius-wkhtmltopdf
+ marqius-wkhtmltopdf is commercial software from Simple AI LLC. It is
+ licensed, not sold. It runs free for 30 days, counted from its first run on
+ a machine; "marqius-wkhtmltopdf licence" shows the days left. After the
+ trial, without a licence, each page it makes carries one line saying the
+ copy is unlicensed.
+ .
+ Licence terms: https://marqius.com/licence/marqius-wkhtmltopdf
+ Plans: https://marqius.com/wkhtmltopdf/
+ .
+ The program carries fonts for Arabic and Hebrew under the SIL Open Font
+ License, Version 1.1; "marqius-wkhtmltopdf notices" prints them and their
+ licence.

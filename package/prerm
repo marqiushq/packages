@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs before marqius-wkhtmltopdf is removed, and does nothing when it is only upgraded.
+#
+# If "marqius-wkhtmltopdf install" gave it the names wkhtmltopdf and wkhtmltoimage in
+# /usr/local/bin, they are taken away, and a program they had replaced is put back. So no
+# name is left pointing at a program that is gone.
+#
+# dpkg passes "remove", or "upgrade", "deconfigure" or "failed-upgrade". rpm passes the
+# number of copies left afterwards: 0 when the package is removed. apk passes the version
+# being removed.
+set -e
+
+case "${1:-}" in
+    upgrade|failed-upgrade|deconfigure) exit 0 ;;
+    [1-9]|[1-9][0-9]) exit 0 ;;
+esac
+
+program=/usr/bin/marqius-wkhtmltopdf
+folder=/usr/local/bin
+[ -x "$program" ] || exit 0
+me="$(readlink -f "$program" 2>/dev/null)" || exit 0
+
+named=""
+for name in wkhtmltopdf wkhtmltoimage; do
+    if [ -L "$folder/$name" ] && [ "$(readlink -f "$folder/$name" 2>/dev/null)" = "$me" ]; then
+        named=yes
+    fi
+done
+if [ -n "$named" ]; then
+    "$program" install "$folder" --undo >/dev/null 2>&1 || true
+    echo "marqius-wkhtmltopdf: the names wkhtmltopdf and wkhtmltoimage in $folder are taken away"
+fi
+exit 0

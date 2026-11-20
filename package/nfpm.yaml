@@ -1,0 +1,95 @@
+# marqius-wkhtmltopdf as a .deb, an .rpm and an Alpine .apk, made from the published static
+# Linux build. scripts/build-packages.sh writes the ${...} values into a copy of this file and
+# runs nfpm on it once per format and architecture.
+#
+# It installs /usr/bin/marqius-wkhtmltopdf and nothing else on PATH: the names wkhtmltopdf
+# and wkhtmltoimage are taken only when the user runs "marqius-wkhtmltopdf install", so an
+# existing wkhtmltopdf is never hidden. The fonts are the ones the program itself asks for
+# when a system has none, and the same as in the marqius/wkhtmltopdf Docker images. On the
+# dnf systems Liberation is recommended rather than required: Red Hat's UBI images do not
+# offer it, and there the package installs with DejaVu alone.
+name: marqius-wkhtmltopdf
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: ${REVISION}
+section: utils
+priority: optional
+maintainer: Simple AI LLC <hello@marqius.com>
+vendor: Simple AI LLC
+homepage: https://marqius.com/wkhtmltopdf/
+license: LicenseRef-marqius-wkhtmltopdf
+description: |-
+  Drop-in replacement for wkhtmltopdf (commercial, 30-day trial)
+  marqius-wkhtmltopdf reads wkhtmltopdf's command line as it is, so the
+  applications and libraries that run wkhtmltopdf keep working.
+
+  It is installed as marqius-wkhtmltopdf only and never hides another
+  wkhtmltopdf. "sudo marqius-wkhtmltopdf install" gives it the names
+  wkhtmltopdf and wkhtmltoimage in /usr/local/bin, and
+  "sudo marqius-wkhtmltopdf install --undo" takes them away.
+
+  Commercial software from Simple AI LLC, with a 30-day free trial counted
+  from its first run; "marqius-wkhtmltopdf licence" shows the days left.
+
+contents:
+  - src: ${BUILD}
+    dst: /usr/bin/marqius-wkhtmltopdf
+    file_info:
+      mode: 0755
+  - src: package/copyright
+    dst: /usr/share/doc/marqius-wkhtmltopdf/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: ${CHANGELOG}
+    dst: /usr/share/doc/marqius-wkhtmltopdf/changelog.Debian.gz
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: package/copyright
+    dst: /usr/share/licenses/marqius-wkhtmltopdf/LICENSE
+    type: license
+    packager: rpm
+    file_info:
+      mode: 0644
+  - src: package/copyright
+    dst: /usr/share/licenses/marqius-wkhtmltopdf/LICENSE
+    packager: apk
+    file_info:
+      mode: 0644
+
+scripts:
+  preremove: package/prerm
+
+overrides:
+  deb:
+    depends:
+      - fonts-liberation2
+      - fonts-dejavu-core
+  rpm:
+    depends:
+      - dejavu-sans-fonts
+    recommends:
+      - liberation-fonts
+  apk:
+    depends:
+      - font-liberation
+      - font-dejavu
+
+deb:
+  compression: xz
+
+# the .rpm is signed afterwards with rpmsign (scripts/in/sign-rpms.sh), which dates its
+# signature; nfpm's own rpm signatures carry the date 1 January 1970
+rpm:
+  summary: Drop-in replacement for wkhtmltopdf (commercial, 30-day trial)
+  packager: Simple AI LLC <hello@marqius.com>
+  buildhost: marqius-packages
+  compression: xz
+
+# key_name is the public key's file name in /etc/apk/keys without ".rsa.pub", which nfpm adds
+apk:
+  signature:
+    key_file: ${APK_KEY_FILE}
+    key_name: ${APK_KEY_NAME}
