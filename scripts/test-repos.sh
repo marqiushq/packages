@@ -18,9 +18,9 @@
 # The exit status is 0 only when every system passed.
 #
 # The images come from their makers' own registries, or from Amazon's public mirror of Docker's
-# official images, never from Docker Hub, whose pull limit is shared by everything on a machine.
-# Each is pinned by the digest of its build for the architecture, looked up once and pulled one
-# at a time before the containers start.
+# official images (else Google's: the same images, the same digests), never from Docker Hub, whose
+# pull limit is shared by everything on a machine. Each is pinned by the digest of its build for
+# the architecture, looked up once and pulled one at a time before the containers start.
 set -eu
 here="$(cd "$(dirname "$0")/.." && pwd)"
 BASE_URL="${BASE_URL:-https://packages.marqius.com}"
@@ -49,19 +49,35 @@ system() {
     esac
 }
 
-# a registry call, again after a pause when the registry says "too many requests"
+# a registry call, again after longer and longer pauses while the registry answers "too many
+# requests" (registries limit how often an address may ask, and CI machines share addresses)
 retry() {
-    n=0
-    until "$@"; do
-        n=$((n + 1))
-        [ "$n" -lt 6 ] || return 1
-        sleep $((n * 5))
+    for pause in 0 15 30 60 120; do
+        sleep "$pause"
+        "$@" && return 0
     done
+    return 1
 }
 
-# image -> the digests of its linux/amd64 and linux/arm64 builds, as "amd64 REF" and "arm64 REF"
+# the same image in Google's mirror of Docker's official images, for an image of Amazon's mirror
+mirror() {
+    case "$1" in
+        public.ecr.aws/docker/library/*) echo "mirror.gcr.io/library/${1#public.ecr.aws/docker/library/}" ;;
+        public.ecr.aws/amazonlinux/amazonlinux[:@]*) echo "mirror.gcr.io/library/amazonlinux${1#public.ecr.aws/amazonlinux/amazonlinux}" ;;
+    esac
+}
+
+# pull REF (one architecture of an image, by digest), from its mirror if its registry stays busy
+fetch_image() {
+    retry docker pull -q --platform "$2" "$1" >/dev/null && return 0
+    m="$(mirror "$1")"
+    [ -n "$m" ] && retry docker pull -q --platform "$2" "$m" >/dev/null && docker tag "$m" "$1"
+}
+
+# image -> the digests of its linux/amd64 and linux/arm64 builds, as "amd64 REF" and "arm64 REF",
+# read from the image's index with one request
 digests() {
-    docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' > "$RESULTS/manifest.json" || return 1
+    docker manifest inspect "$1" > "$RESULTS/manifest.json" 2>/dev/null || return 1
     python3 - "$1" "$RESULTS/manifest.json" <<'EOF'
 import json, sys
 image, path = sys.argv[1:3]
@@ -130,13 +146,15 @@ export EXPECT
 : > "$RESULTS/images"
 for s in $systems; do
     image="$(system "$s" | cut -d' ' -f1)"
-    found="$(retry digests "$image")" || { echo "cannot look up $image" >&2; exit 1; }
+    found="$(retry digests "$image")" || found="$(retry digests "$(mirror "$image")" | sed "s|$(mirror "$image" | sed 's/:[^:]*$//')@|${image%:*}@|")" \
+        || { echo "cannot look up $image" >&2; exit 1; }
+    [ -n "$found" ] || { echo "cannot look up $image" >&2; exit 1; }
     for p in $PLATFORMS; do
         ref="$(echo "$found" | awk -v a="${p#linux/}" '$1 == a { print $2 }')"
         [ -n "$ref" ] || { echo "$image has no build for $p" >&2; exit 1; }
         echo "$s ${p#linux/} $ref" >> "$RESULTS/images"
         if ! docker image inspect "$ref" >/dev/null 2>&1; then
-            retry docker pull -q --platform "$p" "$ref" >/dev/null || { echo "cannot pull $ref" >&2; exit 1; }
+            fetch_image "$ref" "$p" || { echo "cannot pull $ref" >&2; exit 1; }
         fi
     done
 done
@@ -174,11 +192,18 @@ if [ "$mode" != live ]; then
     fi
     oldsite="$site"
     [ -n "$old" ] && oldsite="$old"
-    docker image inspect "$SERVER_IMAGE" >/dev/null 2>&1 || retry docker pull -q "$SERVER_IMAGE" >/dev/null
+    docker image inspect "$SERVER_IMAGE" >/dev/null 2>&1 || fetch_image "$SERVER_IMAGE" "linux/$(docker version --format '{{.Server.Arch}}')"
     docker run -d --name "$NET-server" --network "$NET" --network-alias "$host" \
         -v "$site:/srv/new:ro" -v "$oldsite:/srv/old:ro" -v "$RESULTS/link:/srv/link" \
         -v "$RESULTS/server:/c:ro" -v "$here/scripts/in:/s:ro" \
         "$SERVER_IMAGE" python3 /s/serve.py /srv/link/current "$prefix" /c/server.crt /c/server.key >/dev/null
+    # no system starts before the stand-in answers
+    n=0
+    until docker exec "$NET-server" python3 -c 'import socket; socket.create_connection(("127.0.0.1", 443), 1)' 2>/dev/null; do
+        n=$((n + 1))
+        [ "$n" -lt 60 ] || { echo "the stand-in server did not start" >&2; docker logs "$NET-server" >&2; exit 1; }
+        sleep 1
+    done
     export NET CA_DIR
 fi
 

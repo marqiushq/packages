@@ -32,18 +32,29 @@ mkdir -p "$RESULTS"
 blocks="$RESULTS/blocks"
 python3 "$here/scripts/doc-blocks.py" "$here/README.md" "$blocks" >/dev/null
 set -- ${PLATFORM:+--platform "$PLATFORM"}
-# the base images first, one at a time, again after a pause when a registry is busy, so that a
-# rate limit is never taken for a failing line
+# the base images first, one at a time, again after longer and longer pauses while a registry is
+# busy, and from Google's mirror of Docker's official images if Amazon's stays busy (the same
+# images), so that a rate limit is never taken for a failing line
 retry() {
-    n=0
-    until "$@"; do
-        n=$((n + 1))
-        [ "$n" -lt 6 ] || return 1
-        sleep $((n * 5))
+    for pause in 0 15 30 60 120; do
+        sleep "$pause"
+        "$@" && return 0
     done
+    return 1
+}
+mirror() {
+    case "$1" in
+        public.ecr.aws/docker/library/*) echo "mirror.gcr.io/library/${1#public.ecr.aws/docker/library/}" ;;
+        public.ecr.aws/amazonlinux/amazonlinux:*) echo "mirror.gcr.io/library/amazonlinux:${1##*:}" ;;
+    esac
 }
 for pair in $ALL; do
-    retry docker pull -q "$@" "${pair#*=}" >/dev/null || { echo "cannot pull ${pair#*=}" >&2; exit 1; }
+    image="${pair#*=}"
+    if ! retry docker pull -q "$@" "$image" >/dev/null; then
+        m="$(mirror "$image")"
+        { [ -n "$m" ] && retry docker pull -q "$@" "$m" >/dev/null && docker tag "$m" "$image"; } \
+            || { echo "cannot pull $image" >&2; exit 1; }
+    fi
 done
 failed=0
 for pair in $ALL; do
