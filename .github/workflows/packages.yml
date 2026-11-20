@@ -325,6 +325,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      attestations: read
     env:
       VERSION: ${{ needs.follow.outputs.version }}
       PLATFORMS: ${{ matrix.platform }}
