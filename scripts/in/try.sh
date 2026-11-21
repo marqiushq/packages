@@ -51,12 +51,14 @@ prepare() {
     fi
     # a block runs as a reader runs it: in a terminal (dnf asks before it accepts a key, and
     # refuses when nobody is at one), answering yes to each question. The answer is typed once
-    # a second, as a person would: apt throws away what was typed before it asked.
+    # a second, as a person would: apt throws away what was typed before it asked. The typing
+    # stops after five minutes (an older script, util-linux 2.37, can wait for it to end after
+    # the block has finished), and a block has fifteen minutes in all.
     mkdir -p /usr/local/sbin
     if [ "$FAMILY" = apk ]; then
-        printf '#!/bin/sh\ncd "$HOME" && sh -e "$1" < /dev/null\n' > /usr/local/sbin/runblock
+        printf '#!/bin/sh\ncd "$HOME" && timeout 900 sh -e "$1" < /dev/null\n' > /usr/local/sbin/runblock
     else
-        printf '#!/bin/sh\ncd "$HOME" && while sleep 1; do echo y; done | script -qe --echo never -c "bash -e $1" /dev/null\n' > /usr/local/sbin/runblock
+        printf '#!/bin/sh\ncd "$HOME" && i=0 && while [ $i -lt 300 ] && sleep 1; do echo y; i=$((i + 1)); done | timeout 900 script -qe --echo never -c "bash -e $1" /dev/null\n' > /usr/local/sbin/runblock
     fi
     chmod 755 /usr/local/sbin/runblock
 }

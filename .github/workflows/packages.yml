@@ -166,12 +166,15 @@ jobs:
         run: |
           mkdir -p pool before
           cp packages/* pool/
-          if ls before/*.deb >/dev/null 2>&1; then cp before/*.deb before/*.rpm before/*.apk pool/; fi
+          # the site as it was before this release is written first, for the update test: apt
+          # ignores an index dated earlier than the one it holds, and a real one never is
+          if ls before/*.deb >/dev/null 2>&1; then
+            cp before/*.deb before/*.rpm before/*.apk pool/
+            scripts/make-repos.sh before site-before "$BASE_URL"
+            sleep 2
+          fi
           scripts/make-repos.sh pool site "$BASE_URL"
           python3 scripts/make-index.py README.md site ${{ needs.follow.outputs.publish == 'true' && '--strict' || '' }}
-          if ls before/*.deb >/dev/null 2>&1; then
-            scripts/make-repos.sh before site-before "$BASE_URL"
-          fi
       - id: room
         name: How much of GitHub Pages' 1 GB the repositories use
         run: |
@@ -200,6 +203,7 @@ jobs:
 
   test:
     needs: [follow, build]
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -315,6 +319,7 @@ jobs:
 
   verify:
     needs: [follow, publish]
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

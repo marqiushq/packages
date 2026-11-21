@@ -100,14 +100,17 @@ if [ "${1:-}" = --one ]; then
     set -- --platform "$platform" -v "$BLOCKS:/blocks:ro" -v "$here/scripts/in:/s:ro"
     [ -n "${NET:-}" ] && set -- "$@" --network "$NET" -v "$CA_DIR:/test:ro"
     start="$(date +%s)"
+    # half an hour at most for one system, where the machine can say so (macOS has no timeout)
+    limit=""
+    if command -v timeout >/dev/null 2>&1; then limit="timeout 1800"; fi
     if [ -n "${UPGRADE_FROM:-}" ]; then
         name="marqius-pkgtest-$RUN_ID-$sys-$arch"
         docker run -d --name "$name" "$@" "$ref" sleep 3600 >/dev/null
         echo "$name" >> "$RESULTS/containers"
-        docker exec -e FAMILY="$family" -e EXPECT="$UPGRADE_FROM" -e PHASE=install -e BASE_URL="$BASE_URL" "$name" sh /s/try.sh > "$log" 2>&1 || true
+        $limit docker exec -e FAMILY="$family" -e EXPECT="$UPGRADE_FROM" -e PHASE=install -e BASE_URL="$BASE_URL" "$name" sh /s/try.sh > "$log" 2>&1 || true
         exit 0
     fi
-    docker run --rm "$@" -e FAMILY="$family" -e EXPECT="$EXPECT" -e PHASE="${PHASE:-all}" -e BASE_URL="$BASE_URL" "$ref" sh /s/try.sh > "$log" 2>&1 || true
+    $limit docker run --rm "$@" -e FAMILY="$family" -e EXPECT="$EXPECT" -e PHASE="${PHASE:-all}" -e BASE_URL="$BASE_URL" "$ref" sh /s/try.sh > "$log" 2>&1 || true
     echo "seconds $(( $(date +%s) - start ))" >> "$log"
     exit 0
 fi
@@ -142,10 +145,25 @@ else
 fi
 export EXPECT
 
-# ---- the images: looked up once each, then pulled one at a time
+# ---- the images. On a machine of its own (GitHub's: one architecture a job) each is pulled by
+# name, once, and used as it is. On a shared machine each is pinned by the digest of its build for
+# the architecture, looked up once and pulled one at a time, so that no image name another task
+# relies on ever moves to another architecture.
 : > "$RESULTS/images"
+by_name=""
+case "$PLATFORMS" in
+    *" "*) ;;
+    *) if [ "${GITHUB_ACTIONS:-}" = true ]; then by_name=yes; fi ;;
+esac
 for s in $systems; do
     image="$(system "$s" | cut -d' ' -f1)"
+    if [ -n "$by_name" ]; then
+        echo "$s ${PLATFORMS#linux/} $image" >> "$RESULTS/images"
+        if ! docker image inspect "$image" >/dev/null 2>&1; then
+            fetch_image "$image" "$PLATFORMS" || { echo "cannot pull $image" >&2; exit 1; }
+        fi
+        continue
+    fi
     found="$(retry digests "$image")" || found="$(retry digests "$(mirror "$image")" | sed "s|$(mirror "$image" | sed 's/:[^:]*$//')@|${image%:*}@|")" \
         || { echo "cannot look up $image" >&2; exit 1; }
     [ -n "$found" ] || { echo "cannot look up $image" >&2; exit 1; }
@@ -221,7 +239,9 @@ if [ "$mode" = upgrade ]; then
         log="$RESULTS/$s-${p#linux/}.log"
         echo "--- the site now holds $EXPECT" >> "$log"
         grep -q '^FAIL' "$log" && continue
-        docker exec -e FAMILY="$family" -e EXPECT="$EXPECT" -e PHASE=update -e BASE_URL="$BASE_URL" "marqius-pkgtest-$RUN_ID-$s-${p#linux/}" \
+        limit=""
+        if command -v timeout >/dev/null 2>&1; then limit="timeout 1800"; fi
+        $limit docker exec -e FAMILY="$family" -e EXPECT="$EXPECT" -e PHASE=update -e BASE_URL="$BASE_URL" "marqius-pkgtest-$RUN_ID-$s-${p#linux/}" \
             sh /s/try.sh >> "$log" 2>&1 || true
     done < "$pairs"
 else
