@@ -1,6 +1,8 @@
-# marqius-wkhtmltopdf for apt, dnf and apk
+# Install wkhtmltopdf on Debian 13, Ubuntu 26.04, Rocky, Fedora and Alpine: marqius-wkhtmltopdf
 
-Install **marqius-wkhtmltopdf**, the maintained drop-in replacement for wkhtmltopdf, from signed package repositories, and keep it up to date with the rest of the system. This is for teams whose Linux no longer offers wkhtmltopdf, such as Debian 13 and Ubuntu 26.04. It runs on Debian, Ubuntu, Rocky Linux, Red Hat Enterprise Linux, Fedora, Amazon Linux and Alpine, on x86-64 and ARM64.
+**What it is.** Signed apt, dnf and apk repositories for marqius-wkhtmltopdf, the maintained drop-in replacement for wkhtmltopdf. Install it with your system's own package manager and keep it up to date with the rest of the system.
+
+**Why it matters.** Debian 13 and Ubuntu 26.04 no longer include wkhtmltopdf, so `apt install wkhtmltopdf` answers "Unable to locate package" there, and wkhtmltopdf's own project was archived in 2023. These repositories give you a program that takes the same command and the same options, on Debian, Ubuntu, Rocky Linux, Red Hat Enterprise Linux, Fedora, Amazon Linux and Alpine, on x86-64 and ARM64.
 
 It is installed as `marqius-wkhtmltopdf`, so a wkhtmltopdf you already have keeps working until you choose to switch.
 
@@ -190,6 +192,20 @@ apk del marqius-wkhtmltopdf && sed -i '\|packages.marqius.com|d' /etc/apk/reposi
 ## Tested on every release
 
 Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04, Rocky Linux 9 and 10, Red Hat Enterprise Linux 9 (UBI), Fedora, Amazon Linux 2023, and Alpine 3.22, 3.23 and 3.24, each on x86-64 and ARM64. Before a release reaches the repositories, [the workflow](.github/workflows/packages.yml) checks each download against its published checksum, then installs it on each of these systems with the lines on this page, exactly as printed, and makes a PDF.
+
+## Questions
+
+**Is this the same program as on marqius.com, Homebrew and Docker Hub?**
+Yes. Each package holds the release published on marqius.com, checked against its published checksum before it is packaged, with the fonts it needs.
+
+**Why is it called marqius-wkhtmltopdf and not wkhtmltopdf?**
+So that installing it never changes a program you already have. When you are ready, `sudo marqius-wkhtmltopdf install` gives it the names wkhtmltopdf and wkhtmltoimage, and `--undo` takes them away again.
+
+**Do I need an X server or Xvfb?**
+No. It needs nothing else installed.
+
+**Can I use it in Docker?**
+Yes: the Dockerfile lines above install it in Debian, Ubuntu, Red Hat and Alpine images. Ready-made images are on Docker Hub as [marqius/wkhtmltopdf](https://hub.docker.com/r/marqius/wkhtmltopdf).
 
 ## Licence
 
