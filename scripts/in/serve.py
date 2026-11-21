@@ -30,6 +30,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.directory = os.path.realpath(root)
         return super().translate_path(path[len(prefix):] or "/")
 
+    def send_head(self):
+        # Every answer is a full one, as from a site just published. The sites an update test
+        # switches between were written in no set order, so their files' dates do not say which
+        # is newer, and answering apt's "If-Modified-Since" from them would keep the old index.
+        del self.headers["If-Modified-Since"]
+        del self.headers["If-None-Match"]
+        return super().send_head()
+
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
 
