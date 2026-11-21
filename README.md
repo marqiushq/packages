@@ -209,6 +209,6 @@ Yes: the Dockerfile lines above install it in Debian, Ubuntu, Red Hat and Alpine
 
 ## Licence
 
-marqius-wkhtmltopdf is commercial software from Simple AI LLC, with a 30-day free trial counted from its first run; `marqius-wkhtmltopdf licence` shows the days left. After the trial, without a licence, each page carries one line saying the copy is unlicensed. [Plans and licences](https://marqius.com/wkhtmltopdf/) · [Licence terms](https://marqius.com/licence/marqius-wkhtmltopdf)
+marqius-wkhtmltopdf is commercial software from Simple AI LLC, with a 30-day free trial counted from its first run; `marqius-wkhtmltopdf licence` shows the days left. After the trial, without a licence, each page carries one line, “Prepared by Marqius, Purchase Licence”. [Plans and licences](https://marqius.com/wkhtmltopdf/) · [Licence terms](https://marqius.com/licence/marqius-wkhtmltopdf)
 
 Questions: hello@marqius.com. The same program is also available [with Homebrew](https://github.com/marqiushq/homebrew-tap), as the [Docker image marqius/wkhtmltopdf](https://hub.docker.com/r/marqius/wkhtmltopdf), and with the one-line installer on [marqius.com](https://marqius.com/wkhtmltopdf/).
