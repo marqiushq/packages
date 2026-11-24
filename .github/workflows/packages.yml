@@ -27,6 +27,11 @@ on:
   schedule:
     - cron: "41 * * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Rehearsal: build the latest release's packages with throwaway keys and run the README's lines on 13 systems, even if the repositories serve it; publish nothing"
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -35,7 +40,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: packages-${{ github.ref }}
+  # a rehearsal neither waits behind a run that publishes nor takes its place
+  group: packages-${{ github.ref }}${{ inputs.dry_run && '-dry-run' || '' }}
   cancel-in-progress: false
 
 env:
@@ -55,25 +61,27 @@ jobs:
         name: Compare marqius.com's latest release with what the repositories serve
         if: github.event_name != 'schedule' || vars.PUBLISHING == 'on'
         env:
-          ALWAYS: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || vars.PUBLISHING != 'on') && '--always' || '' }}
+          ALWAYS: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || vars.PUBLISHING != 'on' || inputs.dry_run) && '--always' || '' }}
         run: python3 scripts/follow-release.py --site "$BASE_URL" --out builds $ALWAYS
       - id: decide
         name: Build and test, then publish only a new release, only from main, only when switched on
         env:
           NEW: ${{ steps.follow.outputs.new }}
           PUBLISHING: ${{ vars.PUBLISHING }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           build=false; publish=false
           case "$GITHUB_EVENT_NAME" in
             push|pull_request) build=true ;;
             schedule) if [ "$NEW" = true ]; then build=true; fi ;;
-            workflow_dispatch) if [ "$NEW" = true ] || [ "$PUBLISHING" != on ]; then build=true; fi ;;
+            workflow_dispatch) if [ "$NEW" = true ] || [ "$PUBLISHING" != on ] || [ "$DRY_RUN" = true ]; then build=true; fi ;;
           esac
           if [ "$build" = true ] && [ "$NEW" = true ] && [ "$GITHUB_REF" = refs/heads/main ] \
-             && [ "$PUBLISHING" = on ] \
+             && [ "$PUBLISHING" = on ] && [ "$DRY_RUN" != true ] \
              && { [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; }; then
             publish=true
           fi
+          if [ "$DRY_RUN" = true ]; then echo "a rehearsal: built and tested with throwaway keys, nothing published"; fi
           if [ "$PUBLISHING" != on ]; then echo "publishing is switched off (repository variable PUBLISHING)"; fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
