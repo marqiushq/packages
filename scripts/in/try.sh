@@ -24,11 +24,55 @@ PHASE="${PHASE:-all}"
 pass() { echo "ok   $*"; }
 fail() { echo "FAIL $*"; exit 1; }
 
+# Ubuntu's own archive, when some of it crawls: on 26 November 2026 some of its addresses sent 7-28 kB/s
+# for over an hour (kernel.org's mirror of it: 900 kB/s), and the Ubuntu 24.04 test ran out of time in
+# apt-get. Each address of the archive apt names, and that mirror, are asked at once for the first
+# megabyte of one file, for 4 s at most. When an address sends under a quarter of what the mirror sent,
+# apt is pointed at the mirror (the same packages, signed with Ubuntu's own keys, some hours behind);
+# otherwise the system is left as it came. It prints what it did, and nothing when it left apt alone.
+# The README's lines then run as printed. Ubuntu's ARM64 archive (ports) has no such mirror. The same
+# function is in the marqius engine's tests (tools/download-tests/config.py).
+ubuntu_mirror() {
+    local etc src host d ips ip mip get m b n slow got all f t
+    etc=${1:-/etc}
+    grep -qs '^ID=ubuntu' "$etc/os-release" || return 0
+    for t in bash timeout getent mktemp; do command -v $t > /dev/null || { echo "no $t here: nothing measured" >&2; return 0; }; done
+    src=$(grep -lsE 'https?://([a-z0-9-]+\.)*(archive|security)\.ubuntu\.com/ubuntu' "$etc/apt/sources.list" "$etc"/apt/sources.list.d/*.list "$etc"/apt/sources.list.d/*.sources)
+    [ -n "$src" ] || { echo "apt names no archive.ubuntu.com: nothing measured" >&2; return 0; }
+    host=$(grep -ohE 'https?://([a-z0-9-]+\.)*archive\.ubuntu\.com/ubuntu' $src | head -1 | cut -d/ -f3)
+    [ -n "$host" ] || { echo "apt names no archive.ubuntu.com: nothing measured" >&2; return 0; }
+    d=$(mktemp -d)
+    ips=$(getent ahostsv4 "$host" | awk '{ print $1 }' | sort -u)
+    mip=$(getent ahostsv4 mirrors.edge.kernel.org | awk 'NR == 1 { print $1 }')
+    get='exec 3<> "/dev/tcp/$0/80" && printf "GET /ubuntu/ls-lR.gz HTTP/1.0\r\nHost: %s\r\n\r\n" "$1" >&3 && cat <&3'
+    for ip in $ips; do
+        timeout 4 bash -c "$get" "$ip" "$host" 2> /dev/null | head -c 1000000 | wc -c > "$d/$ip" &
+    done
+    timeout 4 bash -c "$get" "${mip:-mirrors.edge.kernel.org}" mirrors.edge.kernel.org 2> /dev/null | head -c 1000000 | wc -c > "$d/mirror" &
+    wait
+    m=$(($(cat "$d/mirror")))
+    n=0 slow=0 got="" all=""
+    for ip in $ips; do
+        b=$(($(cat "$d/$ip")))
+        n=$((n + 1)) all="$all, $ip $((b / 1000))"
+        if [ "$m" -gt $((4 * b)) ]; then slow=$((slow + 1)) got="$got, $((b / 1000))"; fi
+    done
+    rm -rf "$d"
+    echo "kB in 4 s at most: mirrors.edge.kernel.org $((m / 1000))$all" >&2
+    [ "$slow" -gt 0 ] || return 0
+    for f in $src; do
+        sed -E 's#https?://([a-z0-9-]+\.)*(archive|security)\.ubuntu\.com/ubuntu#http://mirrors.edge.kernel.org/ubuntu#g' "$f" > "$f.mirror" && cat "$f.mirror" > "$f" && rm -f "$f.mirror"
+    done
+    echo "kernel.org's mirror of Ubuntu's archive: $slow of $host's $n addresses sent under a quarter of the mirror's $((m / 1000)) kB (${got#, } kB, in 4 s at most)"
+}
+
 # ---- a system as people have one
 prepare() {
     case "$FAMILY" in
         apt)
             export DEBIAN_FRONTEND=noninteractive
+            said="$(ubuntu_mirror)"
+            [ -z "$said" ] || echo "apt: $said"
             { apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo curl ca-certificates; } >/dev/null 2>&1 \
                 || fail "could not install sudo, curl and ca-certificates"
             ;;

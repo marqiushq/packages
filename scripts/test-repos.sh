@@ -254,11 +254,13 @@ need=1
 while read -r s p; do
     arch="${p#linux/}"
     log="$RESULTS/$s-$arch.log"
+    via=""  # try.sh turned apt to kernel.org's mirror: Ubuntu's archive crawled
+    if grep -q "^apt: kernel.org's mirror" "$log"; then via=" (apt used kernel.org's mirror of Ubuntu's archive)"; fi
     if ! grep -q '^FAIL' "$log" && [ "$(grep -c '^PASSED' "$log")" -ge "$need" ]; then
-        printf 'PASS  %-11s %-6s %s\n' "$s" "$arch" "$(grep -c '^ok ' "$log") checks"
+        printf 'PASS  %-11s %-6s %s\n' "$s" "$arch" "$(grep -c '^ok ' "$log") checks$via"
     else
         failed=$((failed + 1))
-        printf 'FAIL  %-11s %-6s %s\n' "$s" "$arch" "$(grep -m1 '^FAIL' "$log" || tail -n 1 "$log")"
+        printf 'FAIL  %-11s %-6s %s\n' "$s" "$arch" "$(grep -m1 '^FAIL' "$log" || tail -n 1 "$log")$via"
     fi
 done < "$pairs"
 [ "$failed" = 0 ]

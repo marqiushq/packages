@@ -73,3 +73,5 @@ These throwaway keys are enough for every local test. The scripts need Docker, a
 | `PHASE=refuse scripts/test-repos.sh SITE` | the install lines must fail on a tampered site |
 
 Every printed command in the README is a block that follows a `<!-- test: NAME -->` line, and the tests run that block as it stands. To change a command, change it there; the next run proves it.
+
+When some of Ubuntu's archive is crawling, the Ubuntu x86-64 tests turn apt to kernel.org's mirror of it before the README's lines run, and the result line says so. Otherwise each system is used as it comes.
